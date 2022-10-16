@@ -1,12 +1,8 @@
-from openpyxl import Workbook, load_workbook
 from xlsxfile import XLSXFile
 from datamanipulator import DataManipulator
-from tkinter.messagebox import askquestion
 from tkinter import Tk, messagebox
 from tkinter.filedialog import askopenfilenames, askdirectory
-import os
-import matplotlib as plot
-import argparse
+import os, argparse
 
 
 # Create the parser
@@ -39,19 +35,20 @@ def main(args):
     if len(ranges) < 1:
         exit("Could not have parsed your time ranges, please double check your input.")
     files = [XLSXFile(path=path) for path in paths]
-    print("\n\nExtraction and normalisation in progress...\n\n")
+    DAT.number_of_files = len(files)
+    print("\n\nExtraction and normalisation in progress...")
 
     for range in ranges:
         for file in files:
             if mode == "height":
                 DAT.height_normalise(file=file, start=range[0], stop=range[1])
-
             elif mode == "both":
                 DAT.height_normalise(file=file, start=range[0], stop=range[1])
+        
+        if mode != "height":
+            DAT.kinetic_normalise(files=files, start=range[0], stop=range[1])
 
-            else:
-                DAT.do_height_normalisation()
-                DAT.do_kinetic_normalisation()
+    print("Normalisation complete...")
 
     while True:
         dir_name = askdirectory(title="Save the results in directory:")
@@ -61,15 +58,16 @@ def main(args):
                 exit("Your nomalisation data was not saved.")
         else:
             break
+
+    print("Saving results...\n\n")
             
     if mode == "height":
         DAT.save_height_data_to_file(save_directory=dir_name, files=files)
     elif mode == "kinetic":
-        pass
+        DAT.save_kinetics_data_to_file(save_directory=dir_name)
     else:
         DAT.save_height_data_to_file(save_directory=dir_name, files=files)
-
-        # Kinetic save implementation.
+        DAT.save_kinetics_data_to_file(save_directory=dir_name)
 
 
 

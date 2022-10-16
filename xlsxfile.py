@@ -1,10 +1,11 @@
 from openpyxl import Workbook, load_workbook
-import os
+import os, uuid
 
 
 class XLSXFile():
 
     def __init__(self, path: str) -> None:
+        self.id = uuid.uuid4()
         self.path = path
         self.results = []
         self.wb = self.make_workbook(path=self.path)

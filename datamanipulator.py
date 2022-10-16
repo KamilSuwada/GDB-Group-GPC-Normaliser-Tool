@@ -1,13 +1,26 @@
 from xlsxfile import XLSXFile
 from openpyxl import Workbook
+from openpyxl.chart import Reference, LineChart
+from openpyxl.utils import get_column_letter
 import os
 
 
 class DataManipulator():
 
     def __init__(self) -> None:
-        self.areas = {}
-        self.heights = {}
+        self.kinetic_keys = []
+        self.detector_keys = []
+        self.kinetic_results = []
+        self.files_data = []
+        self.max_areas = {}
+        self.max_heights = {}
+        self.number_of_files = -1
+
+
+    def clear_all_kinetics(self) -> None:
+        self.files_data = []
+        self.max_areas = {}
+        self.max_heights = {}
 
 
 ##################################### ARGS INPUT CHECKS:
@@ -186,11 +199,87 @@ class DataManipulator():
 
 
     def kinetic_normalise(self, files: list, start: float, stop: float):
-        pass
+        kinetic_key = f"{start} - {stop}"
+        self.kinetic_keys.append(kinetic_key)
+        time = []
+
+        for file in files:
+            dT = file.data["time"][1] - file.data["time"][0]
+            extracted_raw = self.extract_data(file=file, start=start, stop=stop)
+            time = extracted_raw["time"]
+            for d in file.data["channels"]:
+                key = d["type"]
+                if key not in self.detector_keys:
+                    self.detector_keys.append(key)
+                min_shifted = self.shift_minimum_to_zero(data=extracted_raw[key])
+                area = self.compute_area(data=min_shifted, dT=dT)
+
+                try:
+                    previous_max_area = self.max_areas[key]
+                    if previous_max_area < area:
+                        self.max_areas[key] = area
+                except:
+                    self.max_areas[key] = area
+
+                chunk_data = {
+                    "file_name": os.path.basename(file.path),
+                    "file_id": str(file.id),
+                    "channel": key,
+                    "min_shifted": min_shifted,
+                    "area": area,
+                    "area_normalised": [],
+                    "height_normalised": [],
+                }
+                
+                self.files_data.append(chunk_data)
+
+        for data in self.files_data:
+            key = data["channel"]
+            coeff = self.max_areas[key] / data["area"]
+            data["area_normalised"] = [point * coeff for point in data["min_shifted"]]
+
+        for data in self.files_data:
+            key = data["channel"]
+            height = self.find_max(data=data["area_normalised"])
+
+            try:
+                previous_max_height = self.max_heights[key]
+                if previous_max_height < height:
+                    self.max_heights[key] = height
+            except:
+                self.max_heights[key] = height
+
+        for data in self.files_data:
+            key = data["channel"]
+            max_height = self.max_heights[key]
+            data["height_normalised"] = [point / max_height for point in data["area_normalised"]]
+
+            result = {
+                "file_name": data["file_name"],
+                "mode": "kinetic",
+                "time_key": kinetic_key,
+                "detector_type": key,
+                "start_time": start,
+                "stop_time": stop,
+                "time": time,
+                "kinetics_normalised": data["height_normalised"]
+            }
+
+            self.kinetic_results.append(result)
+
+        self.clear_all_kinetics()
 
     
-    def do_kinetic_normalisation(self):
-        pass
+    def compute_area(self, data: list, dT: float) -> float:
+        previous_point = 0
+        area = 0
+
+        for point in data:
+            area_chunk = (previous_point + point) * dT * 0.5
+            area += area_chunk
+            previous_point = point
+        
+        return area
 
 
 
@@ -206,22 +295,24 @@ class DataManipulator():
             sheet_name = os.path.basename(file.path)
             ws = wb.create_sheet()
             ws.title = sheet_name
-            self.write_data_set_to_worksheet(ws=ws, file=file)
+            self.write_height_data_set_to_worksheet(ws=ws, file=file)
 
         
         filename = f"height_results.xlsx"
         wb_path = os.path.join(save_directory, filename)
+        sheet = wb["Sheet"]
+        wb.remove_sheet(sheet)
         wb.save(filename=wb_path)
-        print(f"\nSaved height results to: {wb_path}\n\n")
+        print(f"Saved height results to: {wb_path}")
 
 
-    def write_data_set_to_worksheet(self, ws, file: XLSXFile):
+    def write_height_data_set_to_worksheet(self, ws, file: XLSXFile):
         column = 1
         row = 1
         count = 0
 
         for result in file.results:
-            column += count * 5 + count
+            column += count * 10 + count
 
             ws.cell(column=column, row=row).value = "RT (minutes)"
             ws.cell(column=column + 1, row=row).value = str(result["detector_type"])
@@ -251,8 +342,115 @@ class DataManipulator():
                 ws.cell(column=column + 1, row=row + index).value = float(result["height_normalised"][index])
                 index += 1
 
+            values = Reference(ws, min_col=column + 1, min_row=1, max_col=column + 1, max_row=row + index)
+            x_values = Reference(ws, min_col=column, min_row=2, max_col=column, max_row=row + index)
+
+            chart = LineChart()
+            chart.add_data(values, titles_from_data = True)
+            chart.set_categories(x_values)
+            chart.title = f"{result['detector_type']}: {result['start_time']} - {result['stop_time']}"
+            chart.y_axis.title = f"{result['detector_type']} (normalised)"
+            chart.x_axis.title = "Retention Time (minutes)"
+            chart.legend = None
+            chart.y_axis.scaling.min = 0
+            chart.y_axis.scaling.max = 1.01
+            chart.height = 15
+            chart.y_axis.majorUnit = 1
+            number_of_points = len(result["time"]) / (float(result["stop_time"]) - float(result["start_time"]))
+            chart.x_axis.tickLblSkip = int(number_of_points)
+            placement = get_column_letter(column)
+            for series in chart.series:
+                series.graphicalProperties.line.width = 1
+            ws.add_chart(chart, f"{placement}7")
 
             row = 1
             column = 1
             count += 1
+
+        
+    def save_kinetics_data_to_file(self, save_directory: str):
+        wb = Workbook()
+        
+        for key in self.detector_keys:
+            sheet_name = str(key)
+            ws = wb.create_sheet()
+            ws.title = sheet_name
+            self.write_kinetic_data_set_to_worksheet(ws=ws, detector_key=key)
+
+        
+        filename = f"kinetic_results.xlsx"
+        wb_path = os.path.join(save_directory, filename)
+        sheet = wb["Sheet"]
+        wb.remove_sheet(sheet)
+        wb.save(filename=wb_path)
+        print(f"Saved kinetic results to: {wb_path}")
+
+
+    def write_kinetic_data_set_to_worksheet(self, ws, detector_key: str):
+        column = 1
+        row = 1
+        index = 2
+        count = 0
+
+        for key in self.kinetic_keys:
+            column += count * (self.number_of_files + 2) + count
+            number_of_points = 0
+            ws.cell(column=column, row=row).value = "Time range"
+            ws.cell(column=column, row=row + 1).value = str(key)
+            ws.cell(column=column + 1, row=row).value = "Time (minutes)"
+
+            for result in self.kinetic_results:
+                if result["detector_type"] == detector_key:
+                    if result["time_key"] == key:
+                        time = result["time"]
+                        i = 1
+                        for point in time:
+                            ws.cell(column=column + 1, row=row + i).value = float(point)
+                            i += 1
+                        number_of_points = float(len(time)) / (float(result["stop_time"]) - float(result["start_time"]))
+                        break
+
+            x_values = Reference(ws, min_col=column + 1, min_row=2, max_col=column + 1, max_row=row + 1)
+
+
+            for result in self.kinetic_results:
+                if result["detector_type"] == detector_key:
+                    if result["time_key"] == key:
+                        ws.cell(column=column + index, row=row).value = str(result["file_name"])
+                        data = result["kinetics_normalised"]
+                        i = 1
+                        for point in data:
+                            ws.cell(column=column + index, row=row + i).value = float(point)
+                            i += 1
+                        index += 1
+
+            values = Reference(ws, min_col=column + 2, min_row=1, max_col=column + index - 1, max_row=row + i)
+
+            chart = LineChart()
+            chart.add_data(values, titles_from_data = True)
+            chart.set_categories(x_values)
+            chart.title = f"{detector_key}: {key}"
+            chart.y_axis.title = f"{detector_key} (normalised)"
+            chart.x_axis.title = "Retention Time (minutes)"
+            chart.legend.position = "b"
+            chart.y_axis.scaling.min = 0
+            chart.y_axis.scaling.max = 1.01
+            chart.height = 20
+            chart.width = 30
+            chart.y_axis.majorUnit = 1
+            chart.x_axis.tickLblSkip = number_of_points
+            placement = get_column_letter(column)
+            for series in chart.series:
+                series.graphicalProperties.line.width = 1
+            ws.add_chart(chart, f"{placement}7")
+
+            index = 2
+            column = 1
+            row = 1
+            count += 1
+
+
+
+
+        
     
