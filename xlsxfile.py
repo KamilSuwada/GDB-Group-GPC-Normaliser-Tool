@@ -6,6 +6,7 @@ class XLSXFile():
 
     def __init__(self, path: str) -> None:
         self.path = path
+        self.results = []
         self.wb = self.make_workbook(path=self.path)
         self.data = self.read_workbook(wb=self.wb)
         
@@ -98,8 +99,8 @@ class XLSXFile():
 
         result["time"] = time
         result["channels"] = channels
-        result["data_points"] = data_points 
-        print(f"Successful data extraction from: {self.path}")
+        result["data_points"] = data_points
+        print(f"Successful data extraction from: {os.path.basename(self.path)}")
         return result
 
 
